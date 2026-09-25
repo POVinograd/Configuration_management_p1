@@ -1,7 +1,19 @@
 import getpass
 import os
+import re
 import shlex
 import socket
+
+reg = re.compile(
+    r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))"
+)
+
+def expand_vars(token):
+    def replacer(match):
+        name = match.group(1) or match.group(2)
+        return os.environ.get(name, "")
+
+    return reg.sub(replacer, token)
 
 def get_prompt():
     username = getpass.getuser()
@@ -27,6 +39,8 @@ def parse_command(command_line):
 
     if not parts:
         return "", []
+
+    parts = [expand_vars(part) for part in parts]
 
     return parts[0], parts[1:]
 
