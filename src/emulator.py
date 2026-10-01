@@ -1,3 +1,4 @@
+import argparse
 import getpass
 import os
 import re
@@ -50,11 +51,99 @@ def command_ls(args):
 def command_cd(args):
     print(f'cd: args = {args}')
 
+def command_exit(args):
+    if args:
+        print("Ошибка: команда exit не принимает аргументов")
+        return False
 
-def main():
-    print("Эмулятор UNIX-подобной ОС")
-    print("Доступны команды: ls, cd, exit")
+    print("Выход из эмулятора.")
+    return True
 
+    
+def execute_command(command_line):
+    command, args = parse_command(command_line)
+
+    if command is None:
+        print("Ошибка: некорректные кавычки в команде.")
+        return False
+
+    if not command:
+        return True
+
+    if command == "ls":
+        command_ls(args)
+        return True
+
+    if command == "cd":
+        command_cd(args)
+        return True
+
+    if command == "exit":
+        if command_exit(args):
+            return "exit"
+
+        return False
+
+    print(f'Ошибка: неизвестная команда: {command}')
+    return False
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description= "Эмулятор UNIX-подобной ОС"
+    )
+
+    parser.add_argument(
+        "--vfs-path",
+        help = "Путь к физическому расположению виртуальной "
+        "файловой системы",
+    )
+
+    parser.add_argument(
+        "--script-path",
+        help = "Путь к стартовому скрипту",
+    )
+
+    return parser.parse_args()
+
+
+def print_configuration(args):
+    print("Конфигурация:")
+    print(f"  Путь к VFS: {args.vfs_path or 'не указан'}")
+    print(f"  Путь к скрипту: {args.script_path or 'не указан'}")
+
+
+def run_startup_script(script_path):
+    try:
+        with open(script_path, "r", encoding="utf-8") as script_file:
+            for line_number, line in enumerate(script_file, start = 1):
+                command_line = line.strip()
+
+                if not command_line:
+                    continue
+
+                print(get_prompt() + command_line)
+
+                result = execute_command(command_line)
+
+                if result is False:
+                    print(
+                        f'Ошибка выполнения скрипта '
+                        f'на строке {line_number}.'
+                    )
+                    break
+
+                if result == "exit":
+                    break
+
+    except FileNotFoundError:
+        print(f'Ошибка: файл скрипта не найден: {script_path}')
+
+    except OSError as error:
+        print(f"Ошибка при чтении скрипта: {error}")
+
+
+def run_interactive_mode():
     while True:
         try:
             command_line = input(get_prompt())
@@ -62,27 +151,24 @@ def main():
             print()
             break
 
-        command, args = parse_command(command_line)
+        result = execute_command(command_line)
 
-        if command is None:
-            print("Ошибка: некорректные кавычки в команде.")
-            continue
+        if result == "exit":
+            break
 
-        if command == "exit":
-            if args:
-                print("Ошибка: команда exit не принимает аргументов")
-            else:
-                print("Выход из эмулятора.")
-                break
 
-        elif command == "ls":
-            command_ls(args)
+def main():
+    args = parse_arguments()
 
-        elif command == "cd":
-            command_cd(args)
+    print("Эмулятор UNIX-подобной ОС")
+    print("Доступны команды: ls, cd, exit")
 
-        else:
-            print(f'Ошибка: неизвестная команда: {command}')
+    print_configuration(args)
+
+    if args.script_path:
+        run_startup_script(args.script_path)
+
+    run_interactive_mode()
 
 
 if __name__ == "__main__":
