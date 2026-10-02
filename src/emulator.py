@@ -55,89 +55,77 @@ class VirtualFileSystem:
     def clear(self):
         self.name = "default"
         self.entries = {}
+        self.physical_path = None
 
-    def load_from_zip(self, zip_path):
+    def _build_entry(self, info, archive):
+        raw_name = info.filename.replace("\\", "/")
+        is_directory = raw_name.endswith("/")
+        normalized_path = self.normalize_path(raw_name)
+
+        if is_directory:
+            return normalized_path, {
+                "type": "dir",
+                "data": "",
+            }
+
+        data = archive.read(info)
+
+        return normalized_path, {
+            "type": "file",
+            "data": base64.b64encode(data).decode("ascii"),
+        }
+
+    def _ensure_parents(self, entries, path):
+        parent = str(PurePosixPath(path).parent)
+
+        while parent not in ("", "."):
+            parent = self.normalize_path(parent)
+
+            entries.setdefault(
+                parent,
+                {"type": "dir", "data": ""},
+            )
+
+            if parent == "/":
+                break
+
+            parent = str(PurePosixPath(parent).parent)
+
+    def _read_archive_entries(self, zip_path):
         if not os.path.isfile(zip_path):
             raise FileNotFoundError(
                 f"ZIP-архив VFS не найден: {zip_path}"
             )
-
-        try:
-            with open(zip_path, "rb") as file:
-                archive_data = file.read()
-
-            with zipfile.ZipFile(
-                io.BytesIO(archive_data),
-                "r",
-            ) as archive:
-                if archive.testzip() is not None:
-                    raise ValueError(
-                        "ZIP-архив повреждён."
-                    )
-
-                entries = {}
-
-                for info in archive.infolist():
-                    raw_name = info.filename.replace(
-                        "\\",
-                        "/",
-                    )
-
-                    is_directory = raw_name.endswith("/")
-
-                    normalized_path = self.normalize_path(
-                        raw_name
-                    )
-
-                    if is_directory:
-                        entries[normalized_path] = {
-                            "type": "dir",
-                            "data": "",
-                        }
-
-                    else:
-                        data = archive.read(info)
-
-                        entries[normalized_path] = {
-                            "type": "file",
-                            "data": base64.b64encode(
-                                data
-                            ).decode("ascii"),
-                        }
-
-                        parent = str(
-                            PurePosixPath(
-                                normalized_path
-                            ).parent
-                        )
-
-                        while parent not in ("", "."):
-                            parent = self.normalize_path(
-                                parent
-                            )
-
-                            entries.setdefault(
-                                parent,
-                                {
-                                    "type": "dir",
-                                    "data": "",
-                                },
-                            )
-
-                            if parent == "/":
-                                break
-
-                            parent = str(
-                                PurePosixPath(parent).parent
-                            )
-
-                entries.setdefault(
-                    "/",
-                    {
-                        "type": "dir",
-                        "data": "",
-                    },
+        with open(zip_path, "rb") as file:
+            archive_data = file.read()
+        with zipfile.ZipFile(
+            io.BytesIO(archive_data),
+            "r",
+        ) as archive:
+            if archive.testzip() is not None:
+                raise ValueError(
+                    "ZIP-архив повреждён."
                 )
+            entries = {}
+            for info in archive.infolist():
+                path, entry = self._build_entry(
+                    info,
+                    archive,
+                )
+                entries[path] = entry
+                if entry["type"] == "file":
+                    self._ensure_parents(entries, path)
+
+            entries.setdefault(
+                "/",
+                {"type": "dir", "data": ""},
+            )
+
+            return entries
+
+    def load_from_zip(self, zip_path):
+        try:
+            entries = self._read_archive_entries(zip_path)
 
         except zipfile.BadZipFile as error:
             raise ValueError(
@@ -253,39 +241,29 @@ def command_exit(args):
 
 def execute_command(command_line):
     command, args = parse_command(command_line)
-
     if command is None:
         print(
             "Ошибка: некорректные кавычки в команде."
         )
         return False
-
     if not command:
         return True
-
     if command == "ls":
         command_ls(args)
         return True
-
     if command == "cd":
         command_cd(args)
         return True
-
     if command == "vfs-init":
         return command_vfs_init(args)
-
     if command == "exit":
         if command_exit(args):
             return "exit"
-
         return False
-
     print(
         f"Ошибка: неизвестная команда: {command}"
     )
-
     return False
-
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
