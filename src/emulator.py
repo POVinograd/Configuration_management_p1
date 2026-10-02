@@ -338,24 +338,19 @@ def run_startup_script(script_path):
             "r",
             encoding="utf-8",
         ) as script_file:
-
             for line_number, line in enumerate(
                 script_file,
                 start=1,
             ):
                 command_line = line.strip()
-
                 if not command_line:
                     continue
-
                 print(
                     get_prompt() + command_line
                 )
-
                 result = execute_command(
                     command_line
                 )
-
                 if result is False:
                     print(
                         "Ошибка выполнения скрипта "
