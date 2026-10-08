@@ -1,5 +1,31 @@
+echo === ЭТАП 4: ПРОВЕРКА КОМАНД === 
+
+echo === uptime === 
+uptime 
+uptime -p 
+uptime --pretty 
+uptime -s 
+uptime --since 
+uptime -v 
+uptime --version 
+uptime -h 
+uptime --help 
+
+echo === echo === 
+echo Hello
+echo "Hello World"
+
+echo === VFS === 
+ls . 
+cd level1
 ls
-cd /home
-ls -l
-cd /tmp
+cd level2
+ls .
+cd ..
+
+echo === Проверка изоляции VFS ===
+cd ..
 ls
+
+echo === Завершение === 
+exit
