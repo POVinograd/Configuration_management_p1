@@ -557,6 +557,114 @@ def command_echo(args):
     print(" ".join(args))
     return True
 
+def make_vfs_file_entry(data=""):
+    """Создаёт запись обычного файла в виртуальной файловой системе."""
+    return {
+        "type": "file",
+        "data": data,
+        "mode": "-rw-r--r--",
+        "links": 1,
+        "owner": getpass.getuser(),
+        "group": "-",
+        "mtime": time.time(),
+    }
+
+
+def require_active_vfs(command_name):
+    """Не позволяет командам VFS менять реальные файлы ОС."""
+    if not is_vfs_active():
+        print(
+            f"Ошибка {command_name}: сначала загрузите VFS "
+            "с помощью параметра --vfs-path."
+        )
+        return False
+    return True
+
+
+def command_touch(args):
+    if not args:
+        print("Ошибка touch: укажите хотя бы один файл.")
+        return False
+    if not require_active_vfs("touch"):
+        return False
+
+    success = True
+    for path in args:
+        normalized = resolve_vfs_path(path)
+        if normalized == "/":
+            print("Ошибка touch: нельзя создать файл по пути '/'.")
+            success = False
+            continue
+
+        existing = vfs.entries.get(normalized)
+        if existing is not None:
+            if existing.get("type") != "file":
+                print(f"Ошибка touch: '{path}' является каталогом.")
+                success = False
+                continue
+            existing["mtime"] = time.time()
+            continue
+
+        parent = str(PurePosixPath(normalized).parent)
+        parent_entry = vfs.entries.get(parent)
+        if parent_entry is None or parent_entry.get("type") != "dir":
+            print(
+                f"Ошибка touch: родительский каталог не существует: {parent}"
+            )
+            success = False
+            continue
+
+        vfs.entries[normalized] = make_vfs_file_entry()
+
+    return success
+
+
+def command_cp(args):
+    if len(args) != 2:
+        print("Ошибка cp: использование: cp ИСТОЧНИК НАЗНАЧЕНИЕ")
+        return False
+    if not require_active_vfs("cp"):
+        return False
+
+    source_path = resolve_vfs_path(args[0])
+    destination_path = resolve_vfs_path(args[1])
+    source = vfs.entries.get(source_path)
+
+    if source is None:
+        print(f"Ошибка cp: исходный файл не найден: {args[0]}")
+        return False
+    if source.get("type") != "file":
+        print(f"Ошибка cp: источник не является файлом: {args[0]}")
+        return False
+
+    if destination_path == source_path:
+        return True
+
+    destination = vfs.entries.get(destination_path)
+    if destination is not None and destination.get("type") == "dir":
+        destination_path = resolve_vfs_path(
+            str(PurePosixPath(destination_path) / PurePosixPath(source_path).name)
+        )
+        destination = vfs.entries.get(destination_path)
+
+    if destination is not None and destination.get("type") == "dir":
+        print(f"Ошибка cp: назначение является каталогом: {args[1]}")
+        return False
+
+    parent = str(PurePosixPath(destination_path).parent)
+    parent_entry = vfs.entries.get(parent)
+    if parent_entry is None or parent_entry.get("type") != "dir":
+        print(
+            f"Ошибка cp: каталог назначения не существует: {parent}"
+        )
+        return False
+
+    copied_entry = dict(source)
+    copied_entry["mtime"] = time.time()
+    vfs.entries[destination_path] = copied_entry
+    return True
+
+
 def command_vfs_init(args):
     if args:
         print(
@@ -608,6 +716,10 @@ def execute_command(command_line):
         return command_uptime(args)
     if command == "echo":
         return command_echo(args)
+    if command == "touch":
+        return command_touch(args)
+    if command == "cp":
+        return command_cp(args)
     if command == "vfs-init":
         return command_vfs_init(args)
     if command == "exit":
@@ -695,7 +807,7 @@ def run_startup_script(script_path):
                 start=1,
             ):
                 command_line = line.strip()
-                if not command_line:
+                if not command_line or command_line.startswith("#"):
                     continue
                 print(get_prompt() + command_line)
                 result = execute_command(command_line)
@@ -744,7 +856,7 @@ def main():
     print("Эмулятор UNIX-подобной ОС")
     print(
         "Доступны команды: "
-        "ls, cd, uptime, echo, vfs-init, exit"
+        "ls, cd, uptime, echo, touch, cp, vfs-init, exit"
     )
 
     print_configuration(args)

@@ -1,31 +1,18 @@
-echo === ЭТАП 4: ПРОВЕРКА КОМАНД === 
+echo Создание файлов в корне VFS
+touch some_file.txt
+ls
 
-echo === uptime === 
-uptime 
-uptime -p 
-uptime --pretty 
-uptime -s 
-uptime --since 
-uptime -v 
-uptime --version 
-uptime -h 
-uptime --help 
+echo Копирование файла и проверка результата
+cp some_file.txt copy.txt
+ls
 
-echo === echo === 
-echo Hello
-echo "Hello World"
+echo Повторное touch существующего файла не очищает его
+touch some_file.txt
 
-echo === VFS === 
-ls . 
+echo Проверка относительных путей
 cd level1
+touch file_in_l1.txt
+cp file_in_l1.txt copied.txt
 ls
-cd level2
-ls .
-cd ..
-
-echo === Проверка изоляции VFS ===
-cd ..
+cd /
 ls
-
-echo === Завершение === 
-exit
