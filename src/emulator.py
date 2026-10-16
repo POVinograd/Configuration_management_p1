@@ -11,10 +11,14 @@ import time
 import zipfile
 from pathlib import PurePosixPath
 
+
+bytes_per_unit = 1024
+cp_argument_count = 2
 single_unit = 1
 
 reg = re.compile(
-    r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))"
+    r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}"
+    r"|([A-Za-z_][A-Za-z0-9_]*))"
 )
 
 def expand_vars(token):
@@ -238,9 +242,9 @@ def format_ls_size(size, human_readable=False):
     value = float(size)
 
     for unit in units[:-1]:
-        if value < 1024:
+        if value < bytes_per_unit:
             return f"{value:.1f}{unit}"
-        value /= 1024
+        value /= bytes_per_unit
 
     return f"{value:.1f}{units[-1]}"
 
@@ -259,32 +263,25 @@ def format_owner_group(file_stat=None):
             pass
     return owner, group
 
-def make_ls_entry(
-    name, is_directory, size, mode, links, owner, group, 
-    mtime):
+def make_ls_entry(name, is_directory, size, metadata):
+    """Создаёт запись каталога с метаданными файла."""
     return {
         "name": name,
         "is_directory": is_directory,
         "size": size,
-        "mode": mode,
-        "links": links,
-        "owner": owner,
-        "group": group,
-        "mtime": mtime,
+        **metadata,
     }
 
-def get_vfs_ls_entries(path, show_all=False):
-    normalized = resolve_vfs_path(path)
-    entry = vfs.entries.get(normalized)
-    if entry is None:
-        raise FileNotFoundError(
-            f"такого файла или каталога нет: {path}" )
-    if entry["type"] == "file":
-        size = len(base64.b64decode(entry["data"]))
-        name = PurePosixPath(normalized).name
-        return [make_vfs_ls_entry(name, False, size, entry)]
+def _get_vfs_file_listing(normalized, entry):
+    size = len(base64.b64decode(entry["data"]))
+    name = PurePosixPath(normalized).name
+    return [make_vfs_ls_entry(name, False, size, entry)]
+
+
+def _get_vfs_directory_listing(normalized, show_all):
     prefix = normalized.rstrip("/") + "/"
     entries = []
+
     for item_path, item in vfs.entries.items():
         if not item_path.startswith(prefix):
             continue
@@ -293,36 +290,55 @@ def get_vfs_ls_entries(path, show_all=False):
             continue
         if name.startswith(".") and not show_all:
             continue
+
         is_directory = item["type"] == "dir"
         size = 0 if is_directory else len(
-            base64.b64decode(item["data"]))
+            base64.b64decode(item["data"])
+        )
         entries.append(
-            make_vfs_ls_entry(name, is_directory, size, item))
+            make_vfs_ls_entry(name, is_directory, size, item)
+        )
+
     if show_all:
         now = time.time()
         owner = getpass.getuser()
+        metadata = {
+            "mode": "drwxr-xr-x",
+            "links": 2,
+            "owner": owner,
+            "group": "-",
+            "mtime": now,
+        }
         entries.extend([
-            make_ls_entry(
-                ".", True, 0, "drwxr-xr-x", 2,
-                owner, "-", now),
-            make_ls_entry(
-                "..", True, 0, "drwxr-xr-x", 2,
-                owner, "-", now),])
+            make_ls_entry(".", True, 0, metadata),
+            make_ls_entry("..", True, 0, metadata),
+        ])
+
     return sorted(entries, key=lambda item: item["name"])
+
+
+def get_vfs_ls_entries(path, show_all=False):
+    normalized = resolve_vfs_path(path)
+    entry = vfs.entries.get(normalized)
+    if entry is None:
+        raise FileNotFoundError(
+            f"такого файла или каталога нет: {path}"
+        )
+    if entry["type"] == "file":
+        return _get_vfs_file_listing(normalized, entry)
+    return _get_vfs_directory_listing(normalized, show_all)
 
 def make_vfs_ls_entry(name, is_directory, size, entry):
     default_mode = (
         "drwxr-xr-x" if is_directory else "-rw-r--r--")
-    return make_ls_entry(
-        name,
-        is_directory,
-        size,
-        entry.get("mode", default_mode),
-        entry.get("links", 2 if is_directory else 1),
-        entry.get("owner", getpass.getuser()),
-        entry.get("group", "-"),
-        entry.get("mtime", time.time()),
-    )
+    metadata = {
+        "mode": entry.get("mode", default_mode),
+        "links": entry.get("links", 2 if is_directory else 1),
+        "owner": entry.get("owner", getpass.getuser()),
+        "group": entry.get("group", "-"),
+        "mtime": entry.get("mtime", time.time()),
+    }
+    return make_ls_entry(name, is_directory, size, metadata)
 
 def get_os_ls_entries(path, show_all=False):
     target = os.path.expanduser(path)
@@ -350,11 +366,14 @@ def get_os_ls_entries(path, show_all=False):
             name,
             is_directory,
             file_stat.st_size,
-            stat.filemode(file_stat.st_mode),
-            file_stat.st_nlink,
-            owner,
-            group,
-            file_stat.st_mtime,))
+            {
+                "mode": stat.filemode(file_stat.st_mode),
+                "links": file_stat.st_nlink,
+                "owner": owner,
+                "group": group,
+                "mtime": file_stat.st_mtime,
+            },
+        ))
     return sorted(entries, key=lambda item: item["name"])
 
 
@@ -385,34 +404,41 @@ def print_ls_entries(entries, show_long, human_readable):
             f"{entry['owner']:<8} {entry['group']:<8} "
             f"{size:>8} {modified} {displayed_name}")
 
+def _parse_ls_flag(flag, options):
+    if flag == "l":
+        options["show_long"] = True
+    elif flag == "h":
+        options["human_readable"] = True
+    elif flag == "a":
+        options["show_all"] = True
+    else:
+        raise ValueError(f"неизвестный флаг -{flag}")
+
+
 def parse_ls_args(args):
-    show_long = False
-    human_readable = False
-    show_all = False
+    options = {
+        "show_long": False,
+        "human_readable": False,
+        "show_all": False,
+    }
     paths = []
     options_enabled = True
+
     for arg in args:
         if options_enabled and arg == "--":
             options_enabled = False
-        elif (
-            options_enabled
-            and arg.startswith("-")
-            and arg != "-"
-        ):
+        elif options_enabled and arg.startswith("-") and arg != "-":
             for flag in arg[1:]:
-                if flag == "l":
-                    show_long = True
-                elif flag == "h":
-                    human_readable = True
-                elif flag == "a":
-                    show_all = True
-                else:
-                    raise ValueError(
-                        f"неизвестный флаг -{flag}"
-                    )
+                _parse_ls_flag(flag, options)
         else:
             paths.append(arg)
-    return show_long, human_readable, show_all, paths
+
+    return (
+        options["show_long"],
+        options["human_readable"],
+        options["show_all"],
+        paths,
+    )
 
 def command_ls(args):
     try:
@@ -478,20 +504,20 @@ def get_system_uptime():
             return float(file.read().split()[0])
     except (OSError, AttributeError, ValueError):
         return time.monotonic()
-        
+
 def format_uptime_pretty(uptime_seconds):
-    total_seconds = int(uptime_seconds) 
-    days, remainder = divmod(total_seconds, 86400) 
-    hours, remainder = divmod(remainder, 3600) 
-    minutes = remainder // 60 
+    total_seconds = int(uptime_seconds)
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes = remainder // 60
     parts = []
 
     if days:
         parts.append(f"{days} day" if days == single_unit else f"{days} days")
     if hours:
         parts.append(
-            f"{hours} hour" 
-            if hours==single_unit 
+            f"{hours} hour"
+            if hours==single_unit
             else f"{hours} hours")
     if minutes:
         parts.append(
@@ -502,7 +528,7 @@ def format_uptime_pretty(uptime_seconds):
     if not parts:
         parts.append("0 minutes")
 
-    return "up " + ", ".join(parts)   
+    return "up " + ", ".join(parts)
 
 def print_uptime_help():
     print("Использование: uptime [опция]")
@@ -619,8 +645,18 @@ def command_touch(args):
     return success
 
 
+def _resolve_cp_destination(source_path, destination_path):
+    destination = vfs.entries.get(destination_path)
+    if destination is not None and destination.get("type") == "dir":
+        source_name = PurePosixPath(source_path).name
+        child_path = PurePosixPath(destination_path) / source_name
+        destination_path = resolve_vfs_path(str(child_path))
+        destination = vfs.entries.get(destination_path)
+    return destination_path, destination
+
+
 def command_cp(args):
-    if len(args) != 2:
+    if len(args) != cp_argument_count:
         print("Ошибка cp: использование: cp ИСТОЧНИК НАЗНАЧЕНИЕ")
         return False
     if not require_active_vfs("cp"):
@@ -629,24 +665,18 @@ def command_cp(args):
     source_path = resolve_vfs_path(args[0])
     destination_path = resolve_vfs_path(args[1])
     source = vfs.entries.get(source_path)
-
     if source is None:
         print(f"Ошибка cp: исходный файл не найден: {args[0]}")
         return False
     if source.get("type") != "file":
         print(f"Ошибка cp: источник не является файлом: {args[0]}")
         return False
-
     if destination_path == source_path:
         return True
 
-    destination = vfs.entries.get(destination_path)
-    if destination is not None and destination.get("type") == "dir":
-        destination_path = resolve_vfs_path(
-            str(PurePosixPath(destination_path) / PurePosixPath(source_path).name)
-        )
-        destination = vfs.entries.get(destination_path)
-
+    destination_path, destination = _resolve_cp_destination(
+        source_path, destination_path
+    )
     if destination is not None and destination.get("type") == "dir":
         print(f"Ошибка cp: назначение является каталогом: {args[1]}")
         return False
@@ -654,16 +684,13 @@ def command_cp(args):
     parent = str(PurePosixPath(destination_path).parent)
     parent_entry = vfs.entries.get(parent)
     if parent_entry is None or parent_entry.get("type") != "dir":
-        print(
-            f"Ошибка cp: каталог назначения не существует: {parent}"
-        )
+        print(f"Ошибка cp: каталог назначения не существует: {parent}")
         return False
 
     copied_entry = dict(source)
     copied_entry["mtime"] = time.time()
     vfs.entries[destination_path] = copied_entry
     return True
-
 
 def command_vfs_init(args):
     if args:
@@ -699,36 +726,33 @@ def command_exit(args):
     return True
 
 
+def _command_handlers():
+    return {
+        "ls": command_ls,
+        "cd": command_cd,
+        "uptime": command_uptime,
+        "echo": command_echo,
+        "touch": command_touch,
+        "cp": command_cp,
+        "vfs-init": command_vfs_init,
+    }
+
+
 def execute_command(command_line):
     command, args = parse_command(command_line)
     if command is None:
-        print(
-            "Ошибка: некорректные кавычки в команде."
-        )
+        print("Ошибка: некорректные кавычки в команде.")
         return False
     if not command:
         return True
-    if command == "ls":
-        return command_ls(args)
-    if command == "cd":
-        return command_cd(args)
-    if command == "uptime":
-        return command_uptime(args)
-    if command == "echo":
-        return command_echo(args)
-    if command == "touch":
-        return command_touch(args)
-    if command == "cp":
-        return command_cp(args)
-    if command == "vfs-init":
-        return command_vfs_init(args)
     if command == "exit":
-        if command_exit(args):
-            return "exit"
-        return False
-    print(
-        f"Ошибка: неизвестная команда: {command}"
-    )
+        return "exit" if command_exit(args) else False
+
+    handler = _command_handlers().get(command)
+    if handler is not None:
+        return handler(args)
+
+    print(f"Ошибка: неизвестная команда: {command}")
     return False
 
 def parse_arguments():
